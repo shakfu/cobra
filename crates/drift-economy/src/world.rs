@@ -6,6 +6,9 @@
 //! the next tick's repricing reflects. The world owns its RNG so a run is fully
 //! reproducible and a dumped [`Snapshot`] is resumable.
 
+use std::collections::VecDeque;
+use std::sync::Arc;
+
 use drift_combat::{Combatant, Encounter, Vec2};
 use drift_core::{DetRng, Money, ShipId, SystemId, Tick};
 use drift_data::ScenarioDef;
@@ -14,6 +17,7 @@ use serde::Serialize;
 use thiserror::Error;
 
 use crate::command::{Command, CommandError, Owner, PlayerId};
+use crate::event::{EventCategory, SimEvent};
 use crate::market::{Market, MarketGood};
 use crate::patrol::{Patrol, PatrolLocation};
 use crate::pricing::PricingStrategy;
@@ -23,6 +27,9 @@ use crate::trader::{choose_trade, Trader, TraderId, TraderLocation};
 /// Per-tick probability a docked patrol (pirate or navy) relocates to a
 /// danger-weighted neighbor.
 const ROAM_CHANCE: f64 = 0.12;
+
+/// Most recent simulation events retained for the debug log (older ones drop off).
+const EVENT_CAP: usize = 2000;
 
 #[derive(Debug, Error)]
 pub enum WorldError {
@@ -100,10 +107,11 @@ pub struct Snapshot<'a> {
     pub next_trader_id: u64,
 }
 
-/// The world. Borrows the immutable [`Registry`] (static content) and owns the
-/// mutable simulation state.
-pub struct World<'r> {
-    registry: &'r Registry,
+/// The world. Shares the immutable [`Registry`] (static content) via `Arc` and
+/// owns the mutable simulation state. Owning (rather than borrowing) the registry
+/// lets the world live in a long-lived host such as a UI app or a server session.
+pub struct World {
+    registry: Arc<Registry>,
     tick: Tick,
     rng: DetRng,
     markets: Vec<Market>,
@@ -128,18 +136,25 @@ pub struct World<'r> {
     commands: Vec<Command>,
     commands_applied: u64,
     commands_rejected: u64,
+    /// Errors from the most recent `command_phase` (ephemeral UI feedback; not
+    /// simulation state, so excluded from the snapshot).
+    last_errors: Vec<CommandError>,
     /// Monotonic source of stable trader ids; never decreases, ids never reused.
     next_trader_id: u64,
+    /// Bounded, deterministic log of notable happenings (debug/observability;
+    /// ephemeral, not part of the snapshot).
+    events: VecDeque<SimEvent>,
 }
 
-impl<'r> World<'r> {
+impl World {
     /// Build a world from linked content and a scenario, seeded by `seed`.
     ///
-    /// Each system's `pricing` name was validated at link time, so it is resolved
-    /// here via the same strategy set. Traders are placed on random systems using
-    /// the seeded RNG (so placement is reproducible).
+    /// Takes shared ownership of the [`Registry`] via `Arc` (clone it cheaply to
+    /// keep a handle for rendering/tooling). Each system's `pricing` name was
+    /// validated at link time, so it is resolved here via the same strategy set.
+    /// Traders are placed on random systems using the seeded RNG.
     pub fn new(
-        registry: &'r Registry,
+        registry: Arc<Registry>,
         scenario: &ScenarioDef,
         seed: u64,
         pricing: &drift_core::NamedRegistry<PricingStrategy>,
@@ -231,7 +246,7 @@ impl<'r> World<'r> {
                     bounty: cfg.bounty,
                     reinforce_interval: cfg.reinforce_interval.max(1),
                 };
-                pirates = spawn_fleet(registry, &mut rng, pirate_ship, runtime.fleet_size);
+                pirates = spawn_fleet(&registry, &mut rng, pirate_ship, runtime.fleet_size);
                 Some(runtime)
             }
         };
@@ -249,7 +264,7 @@ impl<'r> World<'r> {
                     fleet_size: cfg.fleet_size,
                     reinforce_interval: cfg.reinforce_interval.max(1),
                 };
-                navy = spawn_fleet(registry, &mut rng, navy_ship, runtime.fleet_size);
+                navy = spawn_fleet(&registry, &mut rng, navy_ship, runtime.fleet_size);
                 Some(runtime)
             }
         };
@@ -285,8 +300,22 @@ impl<'r> World<'r> {
             commands: Vec::new(),
             commands_applied: 0,
             commands_rejected: 0,
+            last_errors: Vec::new(),
             next_trader_id,
+            events: VecDeque::new(),
         })
+    }
+
+    /// Record a simulation event (trimming the oldest once the buffer is full).
+    fn log_event(&mut self, category: EventCategory, message: String) {
+        self.events.push_back(SimEvent {
+            tick: self.tick,
+            category,
+            message,
+        });
+        if self.events.len() > EVENT_CAP {
+            self.events.pop_front();
+        }
     }
 
     pub fn tick_count(&self) -> Tick {
@@ -299,7 +328,12 @@ impl<'r> World<'r> {
         &self.traders
     }
     pub fn registry(&self) -> &Registry {
-        self.registry
+        &self.registry
+    }
+    /// A cloned `Arc` handle to the shared registry (for a host that wants to keep
+    /// its own reference alongside the world).
+    pub fn registry_arc(&self) -> Arc<Registry> {
+        Arc::clone(&self.registry)
     }
     pub fn piracy_stats(&self) -> PiracyStats {
         self.piracy_stats
@@ -315,6 +349,17 @@ impl<'r> World<'r> {
     }
     pub fn commands_rejected(&self) -> u64 {
         self.commands_rejected
+    }
+    /// Errors from commands rejected in the most recent tick's `command_phase`.
+    /// Ephemeral UI feedback; cleared at the start of each `command_phase`.
+    pub fn last_command_errors(&self) -> &[CommandError] {
+        &self.last_errors
+    }
+    /// The recorded simulation events, oldest first (a bounded recent tail).
+    pub fn events(
+        &self,
+    ) -> impl DoubleEndedIterator<Item = &SimEvent> + ExactSizeIterator {
+        self.events.iter()
     }
 
     /// Enqueue a player command for the next tick. The single input entry point —
@@ -368,11 +413,15 @@ impl<'r> World<'r> {
     /// canonical order across players before this runs; single-player order is the
     /// local submission order.
     fn command_phase(&mut self) {
+        self.last_errors.clear();
         let commands = std::mem::take(&mut self.commands);
         for command in commands {
             match self.apply_command(command) {
                 Ok(()) => self.commands_applied += 1,
-                Err(_) => self.commands_rejected += 1,
+                Err(e) => {
+                    self.commands_rejected += 1;
+                    self.last_errors.push(e);
+                }
             }
         }
     }
@@ -382,7 +431,7 @@ impl<'r> World<'r> {
     /// commands are untrusted input. Traders are addressed by stable [`TraderId`],
     /// resolved to the current slot at apply time.
     fn apply_command(&mut self, command: Command) -> Result<(), CommandError> {
-        let reg = self.registry;
+        let reg = self.registry.clone();
         match command {
             Command::Spawn {
                 player,
@@ -423,7 +472,9 @@ impl<'r> World<'r> {
                 let ship = self.traders[idx].ship;
                 let travel = self.travel_ticks(sys, dest, ship);
                 self.traders[idx].location = TraderLocation::InTransit {
+                    origin: sys,
                     dest,
+                    departure: self.tick,
                     arrival: Tick(self.tick.0 + travel),
                 };
                 Ok(())
@@ -533,7 +584,7 @@ impl<'r> World<'r> {
     }
 
     fn production_phase(&mut self) {
-        let reg = self.registry;
+        let reg = self.registry.clone();
         for i in 0..self.markets.len() {
             let sys = reg.system(self.markets[i].system);
             for (j, &rid) in sys.industries.iter().enumerate() {
@@ -562,7 +613,7 @@ impl<'r> World<'r> {
     }
 
     fn price_phase(&mut self) {
-        let reg = self.registry;
+        let reg = self.registry.clone();
         for market in &mut self.markets {
             let strategy = market.pricing;
             for (&commodity, good) in market.goods.iter_mut() {
@@ -584,7 +635,7 @@ impl<'r> World<'r> {
         };
         advance_fleet(
             &mut self.pirates,
-            self.registry,
+            &self.registry,
             &mut self.rng,
             self.tick,
             rt.pirate_ship,
@@ -602,7 +653,7 @@ impl<'r> World<'r> {
         };
         advance_fleet(
             &mut self.navy,
-            self.registry,
+            &self.registry,
             &mut self.rng,
             self.tick,
             rt.navy_ship,
@@ -629,34 +680,46 @@ impl<'r> World<'r> {
             }
 
             // Navy (faction 0) versus pirates (faction 1), both with persistent state.
-            let reg = self.registry;
+            let reg = self.registry.clone();
             let mut combatants = Vec::with_capacity(navy_idx.len() + pir_idx.len());
             for (k, &ni) in navy_idx.iter().enumerate() {
-                combatants.push(patrol_combatant(reg, &self.navy[ni], 0, side_pos(0.0, k)));
+                combatants.push(patrol_combatant(&reg, &self.navy[ni], 0, side_pos(0.0, k)));
             }
             for (k, &pi) in pir_idx.iter().enumerate() {
-                combatants.push(patrol_combatant(reg, &self.pirates[pi], 1, side_pos(30.0, k)));
+                combatants.push(patrol_combatant(&reg, &self.pirates[pi], 1, side_pos(30.0, k)));
             }
             let mut enc = Encounter::new(combatants);
             enc.resolve(&mut self.rng, 500);
 
             // Write persistent state back and tally casualties.
+            let mut navy_down = 0u32;
             for (k, &ni) in navy_idx.iter().enumerate() {
                 let c = &enc.combatants()[k];
                 self.navy[ni].hull = c.hull;
                 self.navy[ni].shield = c.shield;
                 if !c.alive {
                     self.piracy_stats.navy_lost += 1;
+                    navy_down += 1;
                 }
             }
             let base = navy_idx.len();
+            let mut killed = 0u32;
             for (k, &pi) in pir_idx.iter().enumerate() {
                 let c = &enc.combatants()[base + k];
                 self.pirates[pi].hull = c.hull;
                 self.pirates[pi].shield = c.shield;
                 if !c.alive {
                     self.piracy_stats.pirates_suppressed += 1;
+                    killed += 1;
                 }
+            }
+            if killed > 0 || navy_down > 0 {
+                let system = &reg.system(sys).name;
+                let mut msg = format!("Navy engaged pirates at {system}: {killed} destroyed");
+                if navy_down > 0 {
+                    msg += &format!(", {navy_down} frigate(s) lost");
+                }
+                self.log_event(EventCategory::Navy, msg);
             }
         }
 
@@ -708,7 +771,7 @@ impl<'r> World<'r> {
     /// not save a dead trader). A surviving trader collects a bounty per pirate
     /// killed; a lost one forfeits its cargo and is destroyed.
     fn resolve_ambush(&mut self, t: usize, dest: SystemId) {
-        let reg = self.registry;
+        let reg = self.registry.clone();
         let (max_pirates, respawn_delay, bounty) = {
             let p = self.piracy.as_ref().expect("piracy_phase gates on Some");
             (p.max_pirates, p.respawn_delay, p.bounty)
@@ -762,13 +825,13 @@ impl<'r> World<'r> {
         let navy_offset = combatants.len();
         for &ni in &navy_def {
             f0 += 1;
-            combatants.push(patrol_combatant(reg, &self.navy[ni], 0, side_pos(0.0, f0)));
+            combatants.push(patrol_combatant(&reg, &self.navy[ni], 0, side_pos(0.0, f0)));
         }
 
         // --- Faction 1: pirates ---
         let pirate_offset = combatants.len();
         for (k, &pi) in engaged.iter().enumerate() {
-            combatants.push(patrol_combatant(reg, &self.pirates[pi], 1, side_pos(30.0, k)));
+            combatants.push(patrol_combatant(&reg, &self.pirates[pi], 1, side_pos(30.0, k)));
         }
 
         self.piracy_stats.ambushes += 1;
@@ -797,21 +860,30 @@ impl<'r> World<'r> {
         self.piracy_stats.pirates_destroyed += kills;
 
         // The trader lives or dies on its own hull (index 0), not the faction.
+        let system = &reg.system(dest).name;
+        let tid = self.traders[t].id.0;
         if enc.combatants()[0].alive {
             let reward = bounty * kills as i64;
             self.traders[t].capital += reward;
             self.piracy_stats.bounties_paid += reward;
+            let msg = format!(
+                "Ambush near {system}: trader #{tid} beat {} pirate(s), killed {kills} (+{reward}cr)",
+                engaged.len()
+            );
+            self.log_event(EventCategory::Combat, msg);
         } else {
             self.piracy_stats.traders_lost += 1;
             self.traders[t].cargo.clear(); // shipment lost to the void
             self.traders[t].location = TraderLocation::Destroyed {
                 respawn: Tick(self.tick.0 + respawn_delay),
             };
+            let msg = format!("Ambush near {system}: trader #{tid} destroyed, cargo lost");
+            self.log_event(EventCategory::Piracy, msg);
         }
     }
 
     fn trading_phase(&mut self) {
-        let reg = self.registry;
+        let reg = self.registry.clone();
         let now = self.tick;
         let nsys = reg.system_count();
 
@@ -822,12 +894,15 @@ impl<'r> World<'r> {
                 if now >= respawn {
                     let at = SystemId(self.rng.range_usize(0, nsys) as u32);
                     self.traders[t].location = TraderLocation::Docked(at);
+                    let tid = self.traders[t].id.0;
+                    let msg = format!("Trader #{tid} respawned at {}", reg.system(at).name);
+                    self.log_event(EventCategory::System, msg);
                 }
                 continue;
             }
 
             // Resolve arrivals.
-            if let TraderLocation::InTransit { dest, arrival } = self.traders[t].location {
+            if let TraderLocation::InTransit { dest, arrival, .. } = self.traders[t].location {
                 if now >= arrival {
                     self.traders[t].location = TraderLocation::Docked(dest);
                 } else {
@@ -885,7 +960,9 @@ impl<'r> World<'r> {
                 // Depart toward the destination.
                 let travel = self.travel_ticks(sys, plan.dest, ship);
                 self.traders[t].location = TraderLocation::InTransit {
+                    origin: sys,
                     dest: plan.dest,
+                    departure: now,
                     arrival: Tick(now.0 + travel),
                 };
             } else if let Some(dest) = self.reposition_target(sys, capital, capacity) {
@@ -895,7 +972,9 @@ impl<'r> World<'r> {
                 // collapses, and producers glut while consumers starve.
                 let travel = self.travel_ticks(sys, dest, ship);
                 self.traders[t].location = TraderLocation::InTransit {
+                    origin: sys,
                     dest,
+                    departure: now,
                     arrival: Tick(now.0 + travel),
                 };
             }
@@ -913,7 +992,7 @@ impl<'r> World<'r> {
         capital: Money,
         capacity: u32,
     ) -> Option<SystemId> {
-        let reg = self.registry;
+        let reg = self.registry.clone();
         let risk_aversion = self.risk_aversion;
         let connections = &reg.system(sys).connections;
         if connections.is_empty() {
@@ -973,7 +1052,7 @@ impl<'r> World<'r> {
 
     /// Whole-tick travel time between two systems for a given ship.
     fn travel_ticks(&self, from: SystemId, to: SystemId, ship: ShipId) -> u64 {
-        travel_between(self.registry, from, to, ship)
+        travel_between(&self.registry, from, to, ship)
     }
 }
 
@@ -1017,7 +1096,7 @@ fn advance_fleet(
     let stats = def.combat.unwrap_or_default();
 
     for patrol in fleet.iter_mut() {
-        if let PatrolLocation::InTransit { dest, arrival } = patrol.location {
+        if let PatrolLocation::InTransit { dest, arrival, .. } = patrol.location {
             if now >= arrival {
                 patrol.location = PatrolLocation::Docked(dest);
             }
@@ -1028,7 +1107,9 @@ fn advance_fleet(
                 if let Some(dest) = pick_roam_neighbor(reg, sys, rng) {
                     let travel = travel_between(reg, sys, dest, ship);
                     patrol.location = PatrolLocation::InTransit {
+                        origin: sys,
                         dest,
+                        departure: now,
                         arrival: Tick(now.0 + travel),
                     };
                 }

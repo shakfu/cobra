@@ -1,6 +1,7 @@
 //! End-to-end economy behavior: trader self-correction, convergence, determinism.
 
 use std::collections::HashSet;
+use std::sync::Arc;
 use std::path::PathBuf;
 
 use drift_data::{
@@ -55,7 +56,7 @@ fn l1(a: &[f64], b: &[f64]) -> f64 {
 
 /// Build a minimal two-system galaxy: A produces food, B consumes it, joined by
 /// a short jump. `_c` marks the commodity index for readers.
-fn two_system_registry() -> Registry {
+fn two_system_registry() -> Arc<Registry> {
     let merged = MergedContent {
         commodities: vec![CommodityDef {
             id: "t:food".into(),
@@ -125,7 +126,7 @@ fn two_system_registry() -> Registry {
             combat: None,
         }],
     };
-    link(merged, &pricing_names()).expect("inline registry links")
+    Arc::new(link(merged, &pricing_names()).expect("inline registry links"))
 }
 
 fn scenario(count: u32, ship: &str, capital: i64) -> ScenarioDef {
@@ -153,13 +154,13 @@ fn npc_traders_narrow_the_price_differential() {
 
     // Without traders: producer gluts (price falls), consumer starves (price
     // rises) — the differential grows unchecked.
-    let mut idle = World::new(&reg, &scenario(0, "t:freighter", 0), 1, &pricing).unwrap();
+    let mut idle = World::new(reg.clone(), &scenario(0, "t:freighter", 0), 1, &pricing).unwrap();
     idle.run(TICKS);
     let differential_without =
         (price_at(&idle, "t:b", "t:food") - price_at(&idle, "t:a", "t:food")).abs();
 
     // With traders: food is carried A -> B, holding both prices closer together.
-    let mut active = World::new(&reg, &scenario(8, "t:freighter", 1_000_000), 1, &pricing).unwrap();
+    let mut active = World::new(reg.clone(), &scenario(8, "t:freighter", 1_000_000), 1, &pricing).unwrap();
     active.run(TICKS);
     let a_yes = price_at(&active, "t:a", "t:food");
     let b_yes = price_at(&active, "t:b", "t:food");
@@ -192,7 +193,7 @@ fn price_at(world: &World, system: &str, commodity: &str) -> f64 {
 /// One isolated system that both produces commodity `t:x` at a fixed rate and
 /// consumes it at a higher nominal rate; `consumer_elasticity` sets whether that
 /// demand backs off as the good gets dear. No traders, no neighbours.
-fn single_system_registry(consumer_elasticity: f64) -> Registry {
+fn single_system_registry(consumer_elasticity: f64) -> Arc<Registry> {
     let merged = MergedContent {
         commodities: vec![CommodityDef {
             id: "t:x".into(),
@@ -241,13 +242,13 @@ fn single_system_registry(consumer_elasticity: f64) -> Registry {
             combat: None,
         }],
     };
-    link(merged, &pricing_names()).expect("single-system registry links")
+    Arc::new(link(merged, &pricing_names()).expect("single-system registry links"))
 }
 
 fn solo_price(elasticity: f64, ticks: u64) -> f64 {
     let reg = single_system_registry(elasticity);
     let pricing = builtin_pricing();
-    let mut w = World::new(&reg, &scenario(0, "t:freighter", 0), 1, &pricing).unwrap();
+    let mut w = World::new(reg.clone(), &scenario(0, "t:freighter", 0), 1, &pricing).unwrap();
     w.run(ticks);
     let cid = reg.commodity_id("t:x").unwrap();
     w.markets()[0].price(cid).unwrap() as f64
@@ -290,10 +291,10 @@ fn elastic_demand_caps_scarcity_price_below_clamp() {
 
 #[test]
 fn full_galaxy_prices_converge() {
-    let reg = load_and_link(&core_mods_path(), &pricing_names()).expect("core mod links");
+    let reg = Arc::new(load_and_link(&core_mods_path(), &pricing_names()).expect("core mod links"));
     let scn = scenario(24, "core:cobra_mk3", 5000);
     let pricing = builtin_pricing();
-    let mut world = World::new(&reg, &scn, 42, &pricing).unwrap();
+    let mut world = World::new(reg.clone(), &scn, 42, &pricing).unwrap();
 
     // Sample the price vector every `STEP` ticks and accumulate the per-step L1
     // movement in an early vs. a late window. Convergence = late movement is much
@@ -333,12 +334,12 @@ fn full_galaxy_prices_converge() {
 
 #[test]
 fn same_seed_is_byte_identical() {
-    let reg = load_and_link(&core_mods_path(), &pricing_names()).expect("core mod links");
+    let reg = Arc::new(load_and_link(&core_mods_path(), &pricing_names()).expect("core mod links"));
     let scn = scenario(24, "core:cobra_mk3", 5000);
     let pricing = builtin_pricing();
 
     let run = |seed: u64| {
-        let mut w = World::new(&reg, &scn, seed, &pricing).unwrap();
+        let mut w = World::new(reg.clone(), &scn, seed, &pricing).unwrap();
         w.run(500);
         serde_json::to_string(&w.snapshot()).unwrap()
     };
@@ -388,13 +389,13 @@ fn scenario_piracy(
 
 #[test]
 fn piracy_destroys_traders_deterministically() {
-    let reg = load_and_link(&core_mods_path(), &pricing_names()).expect("core mod links");
+    let reg = Arc::new(load_and_link(&core_mods_path(), &pricing_names()).expect("core mod links"));
     let pricing = builtin_pricing();
     // Unarmed shuttles hauling through the dangerous frontier: easy prey.
     let scn = scenario_piracy(20, "core:shuttle", "core:pirate", 0.15, 0.0);
 
     let run = |seed: u64| {
-        let mut w = World::new(&reg, &scn, seed, &pricing).unwrap();
+        let mut w = World::new(reg.clone(), &scn, seed, &pricing).unwrap();
         w.run(1500);
         w
     };
@@ -413,12 +414,12 @@ fn piracy_destroys_traders_deterministically() {
 
 #[test]
 fn armed_traders_survive_piracy_better_than_unarmed() {
-    let reg = load_and_link(&core_mods_path(), &pricing_names()).expect("core mod links");
+    let reg = Arc::new(load_and_link(&core_mods_path(), &pricing_names()).expect("core mod links"));
     let pricing = builtin_pricing();
 
     let losses = |ship: &str| {
         let scn = scenario_piracy(20, ship, "core:pirate", 0.15, 0.0);
-        let mut w = World::new(&reg, &scn, 42, &pricing).unwrap();
+        let mut w = World::new(reg.clone(), &scn, 42, &pricing).unwrap();
         w.run(1500);
         w.piracy_stats()
     };
@@ -439,10 +440,10 @@ fn armed_traders_survive_piracy_better_than_unarmed() {
 
 #[test]
 fn no_piracy_config_means_no_ambushes() {
-    let reg = load_and_link(&core_mods_path(), &pricing_names()).expect("core mod links");
+    let reg = Arc::new(load_and_link(&core_mods_path(), &pricing_names()).expect("core mod links"));
     let pricing = builtin_pricing();
     let scn = scenario(24, "core:cobra_mk3", 5000); // piracy: None
-    let mut w = World::new(&reg, &scn, 42, &pricing).unwrap();
+    let mut w = World::new(reg.clone(), &scn, 42, &pricing).unwrap();
     w.run(1000);
     assert_eq!(
         w.piracy_stats(),
@@ -458,7 +459,7 @@ fn safe_routes_are_never_ambushed() {
     let reg = two_system_registry();
     let pricing = builtin_pricing();
     let scn = scenario_piracy(8, "t:freighter", "t:freighter", 0.9, 0.0);
-    let mut w = World::new(&reg, &scn, 1, &pricing).unwrap();
+    let mut w = World::new(reg.clone(), &scn, 1, &pricing).unwrap();
     w.run(500);
     assert!(
         w.pirates().is_empty(),
@@ -473,14 +474,14 @@ fn safe_routes_are_never_ambushed() {
 
 #[test]
 fn risk_aware_routing_reduces_losses() {
-    let reg = load_and_link(&core_mods_path(), &pricing_names()).expect("core mod links");
+    let reg = Arc::new(load_and_link(&core_mods_path(), &pricing_names()).expect("core mod links"));
     let pricing = builtin_pricing();
 
     // Armed cobras so surviving traders keep trading (isolating the routing choice
     // from respawn churn). Fewer ships should be lost as risk aversion rises.
     let losses = |aversion: f64| {
         let scn = scenario_piracy(20, "core:cobra_mk3", "core:pirate", 0.15, aversion);
-        let mut w = World::new(&reg, &scn, 42, &pricing).unwrap();
+        let mut w = World::new(reg.clone(), &scn, 42, &pricing).unwrap();
         w.run(2000);
         w.piracy_stats().traders_lost
     };
@@ -495,11 +496,11 @@ fn risk_aware_routing_reduces_losses() {
 
 #[test]
 fn pirate_fleet_is_persistent_and_bounded() {
-    let reg = load_and_link(&core_mods_path(), &pricing_names()).expect("core mod links");
+    let reg = Arc::new(load_and_link(&core_mods_path(), &pricing_names()).expect("core mod links"));
     let pricing = builtin_pricing();
     // fleet_size in scenario_piracy is 12.
     let scn = scenario_piracy(20, "core:cobra_mk3", "core:pirate", 0.15, 0.0);
-    let mut w = World::new(&reg, &scn, 42, &pricing).unwrap();
+    let mut w = World::new(reg.clone(), &scn, 42, &pricing).unwrap();
 
     assert!(!w.pirates().is_empty(), "the fleet spawns at lawless systems");
     w.run(2000);
@@ -530,10 +531,10 @@ fn pirate_fleet_is_persistent_and_bounded() {
 
 #[test]
 fn bounties_reward_armed_traders() {
-    let reg = load_and_link(&core_mods_path(), &pricing_names()).expect("core mod links");
+    let reg = Arc::new(load_and_link(&core_mods_path(), &pricing_names()).expect("core mod links"));
     let pricing = builtin_pricing();
     let scn = scenario_piracy(20, "core:cobra_mk3", "core:pirate", 0.15, 0.0);
-    let mut w = World::new(&reg, &scn, 42, &pricing).unwrap();
+    let mut w = World::new(reg.clone(), &scn, 42, &pricing).unwrap();
     w.run(2000);
     let stats = w.piracy_stats();
     assert!(stats.pirates_destroyed > 0, "armed traders should kill pirates");
@@ -545,7 +546,7 @@ fn bounties_reward_armed_traders() {
 
 #[test]
 fn pirate_fleet_can_be_depleted_without_reinforcement() {
-    let reg = load_and_link(&core_mods_path(), &pricing_names()).expect("core mod links");
+    let reg = Arc::new(load_and_link(&core_mods_path(), &pricing_names()).expect("core mod links"));
     let pricing = builtin_pricing();
     // No effective reinforcement: an aggressive armed fleet should grind the
     // pirates down over time.
@@ -571,8 +572,8 @@ fn pirate_fleet_can_be_depleted_without_reinforcement() {
         escort: None,
         navy: None,
     };
-    let initial = World::new(&reg, &scn, 7, &pricing).unwrap().pirates().len();
-    let mut w = World::new(&reg, &scn, 7, &pricing).unwrap();
+    let initial = World::new(reg.clone(), &scn, 7, &pricing).unwrap().pirates().len();
+    let mut w = World::new(reg.clone(), &scn, 7, &pricing).unwrap();
     w.run(4000);
 
     assert!(initial > 0, "fleet starts populated");
@@ -628,12 +629,12 @@ fn scenario_defended(
 
 #[test]
 fn escorts_reduce_trader_losses() {
-    let reg = load_and_link(&core_mods_path(), &pricing_names()).expect("core mod links");
+    let reg = Arc::new(load_and_link(&core_mods_path(), &pricing_names()).expect("core mod links"));
     let pricing = builtin_pricing();
     // Unarmed shuttles: without help every ambush is fatal.
     let losses = |escort| {
         let scn = scenario_defended("core:shuttle", escort, None);
-        let mut w = World::new(&reg, &scn, 42, &pricing).unwrap();
+        let mut w = World::new(reg.clone(), &scn, 42, &pricing).unwrap();
         w.run(1500);
         w.piracy_stats().traders_lost
     };
@@ -648,10 +649,10 @@ fn escorts_reduce_trader_losses() {
 
 #[test]
 fn navy_patrols_suppress_pirates() {
-    let reg = load_and_link(&core_mods_path(), &pricing_names()).expect("core mod links");
+    let reg = Arc::new(load_and_link(&core_mods_path(), &pricing_names()).expect("core mod links"));
     let pricing = builtin_pricing();
     let scn = scenario_defended("core:cobra_mk3", None, Some(("core:navy", 6)));
-    let mut w = World::new(&reg, &scn, 42, &pricing).unwrap();
+    let mut w = World::new(reg.clone(), &scn, 42, &pricing).unwrap();
 
     assert!(!w.navy().is_empty(), "the navy spawns to patrol lawless space");
     w.run(2000);
@@ -671,7 +672,7 @@ fn navy_patrols_suppress_pirates() {
 
 #[test]
 fn navy_reduces_trader_losses() {
-    let reg = load_and_link(&core_mods_path(), &pricing_names()).expect("core mod links");
+    let reg = Arc::new(load_and_link(&core_mods_path(), &pricing_names()).expect("core mod links"));
     let pricing = builtin_pricing();
     // A navy changes the whole RNG trajectory, so a single-seed comparison is
     // noisy; sum losses across several seeds to capture the causal effect.
@@ -679,7 +680,7 @@ fn navy_reduces_trader_losses() {
         (0..8)
             .map(|seed| {
                 let scn = scenario_defended("core:shuttle", None, navy);
-                let mut w = World::new(&reg, &scn, seed, &pricing).unwrap();
+                let mut w = World::new(reg.clone(), &scn, seed, &pricing).unwrap();
                 w.run(1500);
                 w.piracy_stats().traders_lost
             })
@@ -706,18 +707,18 @@ fn safe_galaxy_has_no_navy() {
         fleet_size: 5,
         reinforce_interval: 10,
     });
-    let mut w = World::new(&reg, &scn, 1, &pricing).unwrap();
+    let mut w = World::new(reg.clone(), &scn, 1, &pricing).unwrap();
     w.run(300);
     assert!(w.navy().is_empty(), "no lawless systems => no navy");
 }
 
 #[test]
 fn defended_runs_are_deterministic() {
-    let reg = load_and_link(&core_mods_path(), &pricing_names()).expect("core mod links");
+    let reg = Arc::new(load_and_link(&core_mods_path(), &pricing_names()).expect("core mod links"));
     let pricing = builtin_pricing();
     let run = |seed: u64| {
         let scn = scenario_defended("core:cobra_mk3", Some(("core:escort", 1)), Some(("core:navy", 6)));
-        let mut w = World::new(&reg, &scn, seed, &pricing).unwrap();
+        let mut w = World::new(reg.clone(), &scn, seed, &pricing).unwrap();
         w.run(800);
         serde_json::to_string(&w.snapshot()).unwrap()
     };
@@ -740,11 +741,11 @@ fn player_trader_id(w: &World, player: PlayerId) -> TraderId {
 
 #[test]
 fn player_can_spawn_and_trade_via_commands() {
-    let reg = load_and_link(&core_mods_path(), &pricing_names()).expect("core mod links");
+    let reg = Arc::new(load_and_link(&core_mods_path(), &pricing_names()).expect("core mod links"));
     let pricing = builtin_pricing();
     // No NPC traders (count 0), no piracy: isolate the player.
     let scn = scenario(0, "core:cobra_mk3", 5000);
-    let mut w = World::new(&reg, &scn, 1, &pricing).unwrap();
+    let mut w = World::new(reg.clone(), &scn, 1, &pricing).unwrap();
 
     let player = PlayerId(0);
     let ship = reg.ship_id("core:cobra_mk3").unwrap();
@@ -790,10 +791,10 @@ fn player_can_spawn_and_trade_via_commands() {
 
 #[test]
 fn invalid_commands_are_rejected_without_side_effects() {
-    let reg = load_and_link(&core_mods_path(), &pricing_names()).expect("core mod links");
+    let reg = Arc::new(load_and_link(&core_mods_path(), &pricing_names()).expect("core mod links"));
     let pricing = builtin_pricing();
     let scn = scenario(0, "core:cobra_mk3", 5000);
-    let mut w = World::new(&reg, &scn, 1, &pricing).unwrap();
+    let mut w = World::new(reg.clone(), &scn, 1, &pricing).unwrap();
 
     let player = PlayerId(0);
     let ship = reg.ship_id("core:cobra_mk3").unwrap();
@@ -827,10 +828,10 @@ fn invalid_commands_are_rejected_without_side_effects() {
 
 #[test]
 fn trader_ids_are_stable_across_removal() {
-    let reg = load_and_link(&core_mods_path(), &pricing_names()).expect("core mod links");
+    let reg = Arc::new(load_and_link(&core_mods_path(), &pricing_names()).expect("core mod links"));
     let pricing = builtin_pricing();
     let scn = scenario(0, "core:cobra_mk3", 5000);
-    let mut w = World::new(&reg, &scn, 1, &pricing).unwrap();
+    let mut w = World::new(reg.clone(), &scn, 1, &pricing).unwrap();
 
     let player = PlayerId(0);
     let ship = reg.ship_id("core:cobra_mk3").unwrap();
@@ -870,10 +871,10 @@ fn trader_ids_are_stable_across_removal() {
 
 #[test]
 fn player_traders_are_not_ai_driven() {
-    let reg = load_and_link(&core_mods_path(), &pricing_names()).expect("core mod links");
+    let reg = Arc::new(load_and_link(&core_mods_path(), &pricing_names()).expect("core mod links"));
     let pricing = builtin_pricing();
     let scn = scenario(0, "core:cobra_mk3", 5000);
-    let mut w = World::new(&reg, &scn, 1, &pricing).unwrap();
+    let mut w = World::new(reg.clone(), &scn, 1, &pricing).unwrap();
 
     let player = PlayerId(0);
     let ship = reg.ship_id("core:cobra_mk3").unwrap();
@@ -891,12 +892,12 @@ fn player_traders_are_not_ai_driven() {
 
 #[test]
 fn commanded_runs_are_deterministic() {
-    let reg = load_and_link(&core_mods_path(), &pricing_names()).expect("core mod links");
+    let reg = Arc::new(load_and_link(&core_mods_path(), &pricing_names()).expect("core mod links"));
     let pricing = builtin_pricing();
     let scn = scenario(6, "core:cobra_mk3", 5000); // some NPCs too
 
     let scripted = |seed: u64| {
-        let mut w = World::new(&reg, &scn, seed, &pricing).unwrap();
+        let mut w = World::new(reg.clone(), &scn, seed, &pricing).unwrap();
         let player = PlayerId(0);
         let ship = reg.ship_id("core:cobra_mk3").unwrap();
         let lave = reg.system_id("core:lave").unwrap();
@@ -912,4 +913,55 @@ fn commanded_runs_are_deterministic() {
         serde_json::to_string(&w.snapshot()).unwrap()
     };
     assert_eq!(scripted(1), scripted(1), "same seed + same commands => identical state");
+}
+
+#[test]
+fn simulation_events_are_recorded_and_deterministic() {
+    let reg = Arc::new(load_and_link(&core_mods_path(), &pricing_names()).expect("core mod links"));
+    let pricing = builtin_pricing();
+    // Piracy drives ambush/respawn events.
+    let scn = scenario_piracy(20, "core:cobra_mk3", "core:pirate", 0.15, 0.0);
+    let run = |seed: u64| {
+        let mut w = World::new(reg.clone(), &scn, seed, &pricing).unwrap();
+        w.run(1500);
+        w.events()
+            .map(|e| (e.tick, e.category, e.message.clone()))
+            .collect::<Vec<_>>()
+    };
+    let a = run(42);
+    assert!(!a.is_empty(), "a piracy run should record events");
+    assert_eq!(a, run(42), "events are deterministic for a fixed seed");
+}
+
+#[test]
+fn per_tick_event_streaming_reconstructs_the_full_log() {
+    let reg = Arc::new(load_and_link(&core_mods_path(), &pricing_names()).expect("core mod links"));
+    let pricing = builtin_pricing();
+    let scn = scenario_piracy(20, "core:cobra_mk3", "core:pirate", 0.15, 0.0);
+    let mut w = World::new(reg.clone(), &scn, 7, &pricing).unwrap();
+
+    // Short enough that the (2000-cap) ring buffer never drops anything, so the
+    // final buffer holds every event that was emitted.
+    const TICKS: u64 = 150;
+    let mut streamed: Vec<(u64, String)> = Vec::new();
+    for _ in 0..TICKS {
+        let now = w.tick_count();
+        w.tick();
+        let mut this: Vec<(u64, String)> = w
+            .events()
+            .rev()
+            .take_while(|e| e.tick == now)
+            .map(|e| (e.tick.get(), e.message.clone()))
+            .collect();
+        this.reverse();
+        streamed.extend(this);
+    }
+
+    let full: Vec<(u64, String)> =
+        w.events().map(|e| (e.tick.get(), e.message.clone())).collect();
+    assert!(!streamed.is_empty(), "the run should emit events");
+    assert_eq!(
+        streamed, full,
+        "streaming each tick's tail events reconstructs the full log exactly, in order"
+    );
 }

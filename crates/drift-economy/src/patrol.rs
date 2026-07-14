@@ -17,7 +17,14 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum PatrolLocation {
     Docked(SystemId),
-    InTransit { dest: SystemId, arrival: Tick },
+    /// Departed `origin` at `departure`, arriving at `dest` at `arrival`. The
+    /// origin/departure let a client interpolate position along the jump edge.
+    InTransit {
+        origin: SystemId,
+        dest: SystemId,
+        departure: Tick,
+        arrival: Tick,
+    },
 }
 
 /// A persistent roaming ship (pirate or navy).

@@ -4,15 +4,19 @@
 //! (advance the economy N ticks, optionally dump state), and `inspect` (run while
 //! periodically printing average prices so convergence is observable).
 
+mod play;
+
 use std::collections::HashSet;
+use std::io::{BufReader, Write};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use drift_combat::{Combatant, Encounter, Outcome, Vec2};
 use drift_core::{CommodityId, DetRng, SimContext, Step, Tick};
 use drift_data::ScenarioDef;
-use drift_economy::{builtin_pricing, PricingStrategy, World};
+use drift_economy::{builtin_pricing, Command as SimCommand, PlayerId, PricingStrategy, World};
 use drift_mods::{load_and_link, Registry};
 
 #[derive(Parser)]
@@ -44,6 +48,13 @@ enum Command {
         /// Write the final world state as JSON to this path.
         #[arg(long)]
         dump: Option<PathBuf>,
+        /// Print the simulation event log (recent tail) after the run.
+        #[arg(long)]
+        log: bool,
+        /// Stream events to stdout live, tick by tick, as the run proceeds
+        /// (the full log, not just the recent tail).
+        #[arg(long)]
+        log_stream: bool,
     },
     /// Run the economy, printing average prices every N ticks.
     Inspect {
@@ -77,6 +88,24 @@ enum Command {
         #[arg(long, default_value_t = 2000)]
         max_ticks: u64,
     },
+    /// Play the living galaxy as a trader (interactive).
+    Play {
+        #[arg(long, default_value = "mods/")]
+        mods: PathBuf,
+        #[arg(long, default_value = "scenarios/equilibrium.ron")]
+        scenario: PathBuf,
+        #[arg(long)]
+        seed: Option<u64>,
+        /// System to start docked at.
+        #[arg(long, default_value = "core:lave")]
+        start: String,
+        /// Ship to fly.
+        #[arg(long, default_value = "core:cobra_mk3")]
+        ship: String,
+        /// Starting capital in credits.
+        #[arg(long, default_value_t = 1000)]
+        capital: i64,
+    },
 }
 
 /// The set of pricing strategy names the loader should accept, taken from the
@@ -90,8 +119,9 @@ fn pricing_registry() -> drift_core::NamedRegistry<PricingStrategy> {
     builtin_pricing()
 }
 
-fn load(mods: &Path) -> Result<Registry> {
+fn load(mods: &Path) -> Result<Arc<Registry>> {
     load_and_link(mods, &known_pricing())
+        .map(Arc::new)
         .with_context(|| format!("loading mods from {}", mods.display()))
 }
 
@@ -125,6 +155,27 @@ fn total_trader_capital(world: &World) -> i64 {
     world.traders().iter().map(|t| t.capital).sum()
 }
 
+/// Advance the world one tick at a time, streaming each tick's newly-emitted
+/// events to stdout as they happen (the full log, unbounded by the ring buffer).
+fn stream_run(world: &mut World, ticks: u64) -> Result<()> {
+    let mut out = std::io::stdout().lock();
+    for _ in 0..ticks {
+        let now = world.tick_count();
+        world.tick();
+        // Events logged during this tick carry `tick == now` and sit at the tail
+        // of the buffer, so walk back until the tick changes.
+        let mut this: Vec<_> = world.events().rev().take_while(|e| e.tick == now).collect();
+        this.reverse();
+        if !this.is_empty() {
+            for e in this {
+                writeln!(out, "[{:>6}] {:?}: {}", e.tick.get(), e.category, e.message)?;
+            }
+            out.flush()?;
+        }
+    }
+    Ok(())
+}
+
 fn main() -> Result<()> {
     tracing_subscriber::fmt()
         .with_env_filter(
@@ -152,7 +203,7 @@ fn main() -> Result<()> {
                 escort: None,
                 navy: None,
             };
-            World::new(&reg, &probe, 0, &pricing_registry()).context("economy validation")?;
+            World::new(reg.clone(), &probe, 0, &pricing_registry()).context("economy validation")?;
             println!(
                 "ok: {} commodities, {} recipes, {} systems linked",
                 reg.commodity_count(),
@@ -167,14 +218,21 @@ fn main() -> Result<()> {
             ticks,
             seed,
             dump,
+            log,
+            log_stream,
         } => {
             let reg = load(&mods)?;
             let scn = load_scenario(&scenario)?;
             let seed = seed.unwrap_or(scn.seed);
             let ticks = ticks.unwrap_or(scn.ticks);
-            let mut world = World::new(&reg, &scn, seed, &pricing_registry())
+            let mut world = World::new(reg.clone(), &scn, seed, &pricing_registry())
                 .context("building world")?;
-            world.run(ticks);
+
+            if log_stream {
+                stream_run(&mut world, ticks)?;
+            } else {
+                world.run(ticks);
+            }
 
             println!("ran {ticks} ticks (seed {seed})");
             for (cid, avg) in average_prices(&world) {
@@ -202,6 +260,13 @@ fn main() -> Result<()> {
                     .with_context(|| format!("writing dump to {}", path.display()))?;
                 println!("dumped state to {}", path.display());
             }
+
+            if log {
+                println!("--- event log (recent tail) ---");
+                for e in world.events() {
+                    println!("[{:>6}] {:?}: {}", e.tick.get(), e.category, e.message);
+                }
+            }
         }
 
         Command::Inspect {
@@ -215,7 +280,7 @@ fn main() -> Result<()> {
             let scn = load_scenario(&scenario)?;
             let seed = seed.unwrap_or(scn.seed);
             let ticks = ticks.unwrap_or(scn.ticks);
-            let mut world = World::new(&reg, &scn, seed, &pricing_registry())
+            let mut world = World::new(reg.clone(), &scn, seed, &pricing_registry())
                 .context("building world")?;
 
             // Header.
@@ -288,6 +353,49 @@ fn main() -> Result<()> {
                 enc.survivors(1),
                 per_side
             );
+        }
+
+        Command::Play {
+            mods,
+            scenario,
+            seed,
+            start,
+            ship,
+            capital,
+        } => {
+            let reg = load(&mods)?;
+            let scn = load_scenario(&scenario)?;
+            let seed = seed.unwrap_or(scn.seed);
+            let mut world =
+                World::new(reg.clone(), &scn, seed, &pricing_registry()).context("building world")?;
+
+            let start_sys = reg
+                .system_id(&start)
+                .with_context(|| format!("unknown start system '{start}'"))?;
+            let ship_id = reg
+                .ship_id(&ship)
+                .with_context(|| format!("unknown ship '{ship}'"))?;
+
+            // Spawn the player ship, then read back its stable id.
+            let player = PlayerId(0);
+            world.queue_command(SimCommand::Spawn {
+                player,
+                ship: ship_id,
+                at: start_sys,
+                capital,
+            });
+            world.tick();
+            let trader = world
+                .traders()
+                .iter()
+                .find(|t| t.is_player())
+                .expect("player ship spawned")
+                .id;
+
+            let stdin = std::io::stdin();
+            let mut stdout = std::io::stdout();
+            writeln!(stdout, "Welcome to Drift, commander. You fly a {ship}.")?;
+            play::run_repl(&reg, &mut world, player, trader, BufReader::new(stdin.lock()), &mut stdout)?;
         }
     }
 

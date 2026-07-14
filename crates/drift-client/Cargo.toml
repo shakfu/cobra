@@ -1,0 +1,20 @@
+[package]
+name = "drift-client"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[[bin]]
+name = "drift-client"
+path = "src/main.rs"
+
+[dependencies]
+drift-core = { workspace = true }
+drift-data = { workspace = true }
+drift-economy = { workspace = true }
+drift-mods = { workspace = true }
+anyhow = { workspace = true }
+ron = { workspace = true }
+clap = { workspace = true }
+eframe = "0.29"

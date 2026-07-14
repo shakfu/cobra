@@ -35,7 +35,8 @@ A galaxy of star systems, each a specialized marketplace, is loaded entirely fro
 | `drift-mods`    | The mod-loader: discover, order, merge, and link content into an immutable `Registry`. |
 | `drift-economy` | The simulation: markets, pricing, production, NPC traders, the `World`. |
 | `drift-combat`  | 2-D combat model: factions, targeting AI, hitscan weapons, shields, encounter resolution. |
-| `drift-cli`     | Headless driver: `validate`, `run`, `inspect`, `battle`.             |
+| `drift-cli`     | Driver: `validate`, `run`, `inspect`, `battle`, and `play` (interactive). |
+| `drift-client`  | Graphical observer (egui/eframe): live galaxy-map view of the running sim. |
 
 ## The plugin seam
 
@@ -48,11 +49,27 @@ make test                 # full workspace test suite (must stay green)
 make validate             # load + link the bundled mods, report errors
 make run                  # run the equilibrium scenario (override: make run TICKS=5000 SEED=7)
 
+# Play the living galaxy as a trader (interactive): buy low, run cargo through
+# pirate space, fight or flee, sell high. Try the lawless `frontier` scenario for
+# real danger. Commands: buy/sell/jump/wait/status/map/help/quit.
+cargo run -p drift-cli -- play --mods mods/ --scenario scenarios/frontier.ron
+
+# Watch the living galaxy in a window (egui/eframe): systems coloured by danger,
+# jump edges, ships animated along their routes, pause/speed controls, piracy HUD,
+# and a live colour-coded event log.
+cargo run -p drift-client -- --scenario scenarios/frontier.ron
+
 # Watch prices converge:
 cargo run -p drift-cli -- inspect --mods mods/ --scenario scenarios/equilibrium.ron --ticks 2000 --every 200
 
 # Deterministic state dump (identical for a fixed seed):
 cargo run -p drift-cli -- run --mods mods/ --scenario scenarios/equilibrium.ron --seed 42 --dump state.json
+
+# Print the simulation event log (ambushes, bounties, navy battles, respawns).
+# --log prints the recent tail at the end; --log-stream streams the full log live,
+# tick by tick, to stdout (pipeable: ... --log-stream | grep Piracy):
+cargo run -p drift-cli -- run --mods mods/ --scenario scenarios/frontier.ron --ticks 400 --log
+cargo run -p drift-cli -- run --mods mods/ --scenario scenarios/frontier.ron --log-stream
 
 # Stage a standalone combat encounter (squadron vs squadron):
 cargo run -p drift-cli -- battle --mods mods/ --ship core:python --vs core:cobra_mk3 --per-side 3 --seed 1

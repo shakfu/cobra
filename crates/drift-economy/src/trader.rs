@@ -22,8 +22,15 @@ use crate::market::Market;
 pub enum TraderLocation {
     /// Parked at a system, able to trade.
     Docked(SystemId),
-    /// Between systems; becomes `Docked(dest)` at tick `arrival`.
-    InTransit { dest: SystemId, arrival: Tick },
+    /// Between systems; departed `origin` at tick `departure` and becomes
+    /// `Docked(dest)` at tick `arrival`. `origin`/`departure` let a client
+    /// interpolate the ship's position along the jump edge.
+    InTransit {
+        origin: SystemId,
+        dest: SystemId,
+        departure: Tick,
+        arrival: Tick,
+    },
     /// Destroyed by pirates; respawns (empty, at a random system) at `respawn`.
     Destroyed { respawn: Tick },
 }

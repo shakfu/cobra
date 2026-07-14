@@ -35,7 +35,8 @@ drift-cli            headless driver: validate / run / inspect / battle
 | `drift-mods` | The mod-loader: discover, dependency-order, merge, and link content into an immutable `Registry`. |
 | `drift-economy` | The simulation: markets, pricing, production, NPC traders, pirates, navy, escorts, and the `World` that owns the RNG and drives the tick. |
 | `drift-combat` | The 2-D combat model: factions, targeting AI, hitscan weapons, shields, encounter resolution. |
-| `drift-cli` | Headless driver exposing `validate`, `run`, `inspect`, and `battle`. |
+| `drift-cli` | Driver exposing `validate`, `run`, `inspect`, `battle`, and `play`. |
+| `drift-client` | Graphical observer (egui/eframe): a leaf crate over the sim; live galaxy-map view on a fixed-timestep loop. |
 
 ## The three load-bearing patterns
 
@@ -119,11 +120,17 @@ serializable `Snapshot`.
 Drive API: `World::tick()` advances one tick; `World::run(n)` advances `n`. Both
 are deterministic given the seed.
 
-### Known gap for interpolation
+**Event log.** `World::events()` returns a bounded, deterministic stream of
+`SimEvent { tick, category, message }` recorded as the sim runs (ambush win/loss,
+navy suppression battles, respawns). It is ephemeral debug/observability output —
+excluded from the snapshot, never fed back into the sim — read by the client's log
+panel and `drift-cli run --log`.
 
-`InTransit { dest, arrival }` records the destination and arrival tick but **not**
-the origin or departure tick. A client that wants to animate an agent gliding
-along a jump edge cannot compute the fraction travelled from the current state
-alone. Adding `origin` (and/or `departure`) to the `InTransit` variants (trader
-and patrol) is the one small simulation change a smooth client needs. See the
-roadmap for details.
+### Interpolation support
+
+The `InTransit { origin, dest, departure, arrival }` variants (trader and patrol)
+carry the origin system and departure tick, so a client can compute the fraction
+travelled — `progress = (now - departure) / (arrival - departure)` — and lerp an
+agent's position along its jump edge. `drift-client` uses this (with a sub-tick
+fraction from its fixed-timestep accumulator) to animate ships smoothly between
+systems.

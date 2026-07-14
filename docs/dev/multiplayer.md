@@ -95,10 +95,9 @@ which is unorderable and un-networkable.
   applies commands, and emits snapshots, reused by the CLI, an eventual server, and
   in-process single-player. The CLI is already a headless driver; a server is that
   plus a socket.
-- **`World<'r>` -> `Arc<Registry>`.** The world borrows the registry, which is
-  awkward for a long-lived session/resource and for snapshotting. Owning the
-  registry via `Arc` makes the world `'static`-friendly. (Also flagged for the
-  graphical client.)
+- **`World<'r>` -> `Arc<Registry>` — DONE.** The world now owns `Arc<Registry>`
+  (no lifetime), so it holds cleanly in a long-lived session/resource. (Done as the
+  graphical-client prerequisite.)
 
 ### Deferred (premature now)
 

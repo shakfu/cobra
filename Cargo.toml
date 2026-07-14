@@ -7,6 +7,7 @@ members = [
     "crates/drift-economy",
     "crates/drift-combat",
     "crates/drift-cli",
+    "crates/drift-client",
 ]
 
 [workspace.package]

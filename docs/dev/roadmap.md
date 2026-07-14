@@ -7,10 +7,15 @@ Forward-looking plan for `drift`. For the current state, see
 
 Ordered by dependency and value from the current headless simulation:
 
-1. **Graphical observer client** — watch the living NPC galaxy. Read-only, no
-   player yet. Detailed strategy below.
-2. **Player agent** — inject player-issued commands (jump, buy/sell, fight) into
-   the simulation; the client gains agency. Naturally follows the observer client.
+1. **Graphical observer client** — SCAFFOLDED (`drift-client`, egui/eframe). A live
+   galaxy-map view (systems coloured by danger, jump edges, pause/speed controls,
+   piracy HUD) over a fixed-timestep sim loop, with agents **animated along jump
+   edges** (interpolated from `InTransit { origin, departure }`). Next: market
+   panels on node selection, and combat-event flashes. Detailed strategy below.
+2. **Player agent** — DONE (interactive CLI). `drift play` lets a human fly a
+   trader through the living galaxy over the command pipeline (buy/sell/jump/wait),
+   with pirate ambushes and bounties narrated in transit. See `drift-cli/src/play.rs`.
+   A graphical player client is a later layer on the same commands.
 3. **Missions and contracts** — cargo runs, bounty contracts, courier jobs, riding
    on the existing bounty and economy plumbing.
 4. **Financial instruments** — futures, loans, insurance on the working spot
@@ -94,17 +99,13 @@ actually on the table.
   pausable) and **interpolate** the render between the previous and current state.
   Determinism holds because the simulation only advances on fixed steps; speed and
   pause are purely client concerns and never feed back into simulation state.
-- **Prerequisite simulation change (small, concrete).** To interpolate an agent
-  gliding along a jump edge, the client needs the fraction travelled. But
-  `InTransit { dest, arrival }` stores neither the origin nor the departure tick.
-  Add `origin` (and/or `departure`) to the trader and patrol `InTransit` variants
-  so position becomes
-  `lerp(origin.pos, dest.pos, (now - departure) / (arrival - departure))`. This is
-  the one real "prepare the simulation for the client" task, and it is cheap.
-- **The `World<'r>` lifetime.** `World` borrows `&'r Registry`, which is awkward to
-  hold in a long-lived client or ECS resource. Switch `World` (and the client) to
-  own the `Registry` via `Arc<Registry>` so the world is friendly to `'static`
-  storage. Straightforward; touches only construction.
+- **Interpolation support — DONE.** The trader and patrol `InTransit` variants now
+  carry `{ origin, dest, departure, arrival }`, so the client lerps position as
+  `lerp(origin.pos, dest.pos, (now - departure) / (arrival - departure))` (with a
+  sub-tick fraction from the fixed-timestep accumulator).
+- **The `World<'r>` lifetime — DONE.** `World` now owns `Arc<Registry>` (no
+  lifetime), so it lives cleanly in the client app. `World::new` takes an
+  `Arc<Registry>`; `World::registry_arc()` hands back a shared handle.
 - **Visuals as data.** Ships have no art yet. Add an optional `sprite` / `model` /
   `color` to `ShipDef` (or a separate client-side asset manifest keyed by ship id).
   Data-driven visuals are consistent with the mod philosophy and are skippable with

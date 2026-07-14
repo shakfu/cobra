@@ -1,0 +1,24 @@
+// A lawless frontier: heavy piracy, no navy, no hired escorts. Laden runs into
+// dangerous systems are genuinely risky. A harder game for `drift play`, and a
+// showcase of the combat/piracy narration.
+(
+    name: "frontier",
+    seed: 42,
+    ticks: 2000,
+    traders: (
+        count: 16,
+        ship: "core:cobra_mk3",
+        starting_capital: 5000,
+    ),
+    piracy: Some((
+        pirate_ship: "core:pirate",
+        base_ambush_chance: 0.15,
+        max_pirates: 2,
+        respawn_delay: 60,
+        fleet_size: 18,
+        bounty: 500,
+        reinforce_interval: 20,
+    )),
+    // No navy, no escorts, and traders press on regardless of danger.
+    risk_aversion: 0.0,
+)
