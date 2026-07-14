@@ -959,6 +959,7 @@ dependencies = [
  "drift-data",
  "drift-economy",
  "drift-mods",
+ "drift-sim",
  "ron",
  "serde",
  "serde_json",
@@ -976,8 +977,10 @@ dependencies = [
  "drift-data",
  "drift-economy",
  "drift-mods",
+ "drift-proto",
+ "drift-server",
+ "drift-sim",
  "eframe",
- "ron",
 ]
 
 [[package]]
@@ -1035,6 +1038,47 @@ dependencies = [
  "thiserror 1.0.69",
  "toml",
  "tracing",
+]
+
+[[package]]
+name = "drift-proto"
+version = "0.1.0"
+dependencies = [
+ "drift-core",
+ "drift-data",
+ "drift-economy",
+ "drift-mods",
+ "drift-sim",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "drift-server"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "drift-data",
+ "drift-economy",
+ "drift-proto",
+ "drift-sim",
+ "serde_json",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
+name = "drift-sim"
+version = "0.1.0"
+dependencies = [
+ "drift-core",
+ "drift-data",
+ "drift-economy",
+ "drift-mods",
+ "ron",
+ "serde_json",
+ "thiserror 1.0.69",
 ]
 
 [[package]]

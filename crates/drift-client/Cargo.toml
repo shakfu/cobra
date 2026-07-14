@@ -14,7 +14,11 @@ drift-core = { workspace = true }
 drift-data = { workspace = true }
 drift-economy = { workspace = true }
 drift-mods = { workspace = true }
+drift-sim = { workspace = true }
+drift-proto = { workspace = true }
 anyhow = { workspace = true }
-ron = { workspace = true }
 clap = { workspace = true }
 eframe = "0.29"
+
+[dev-dependencies]
+drift-server = { workspace = true }

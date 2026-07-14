@@ -13,7 +13,7 @@ use drift_combat::{Combatant, Encounter, Vec2};
 use drift_core::{DetRng, Money, ShipId, SystemId, Tick};
 use drift_data::ScenarioDef;
 use drift_mods::Registry;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use crate::command::{Command, CommandError, Owner, PlayerId};
@@ -72,7 +72,7 @@ struct EscortRuntime {
 }
 
 /// Cumulative piracy tallies over a run.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PiracyStats {
     /// Ambushes that were triggered.
     pub ambushes: u64,

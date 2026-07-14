@@ -6,18 +6,17 @@
 
 mod play;
 
-use std::collections::HashSet;
 use std::io::{BufReader, Write};
-use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::path::PathBuf;
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use drift_combat::{Combatant, Encounter, Outcome, Vec2};
 use drift_core::{CommodityId, DetRng, SimContext, Step, Tick};
 use drift_data::ScenarioDef;
-use drift_economy::{builtin_pricing, Command as SimCommand, PlayerId, PricingStrategy, World};
-use drift_mods::{load_and_link, Registry};
+use drift_economy::{Command as SimCommand, PlayerId, World};
+use drift_mods::Registry;
+use drift_sim::{load_registry, load_scenario, Session};
 
 #[derive(Parser)]
 #[command(name = "drift", about = "Headless economy simulation for the Drift space sim")]
@@ -108,29 +107,6 @@ enum Command {
     },
 }
 
-/// The set of pricing strategy names the loader should accept, taken from the
-/// economy's built-in registry. This is the plugin seam: content is validated
-/// against exactly what the engine can execute.
-fn known_pricing() -> HashSet<String> {
-    builtin_pricing().names().map(String::from).collect()
-}
-
-fn pricing_registry() -> drift_core::NamedRegistry<PricingStrategy> {
-    builtin_pricing()
-}
-
-fn load(mods: &Path) -> Result<Arc<Registry>> {
-    load_and_link(mods, &known_pricing())
-        .map(Arc::new)
-        .with_context(|| format!("loading mods from {}", mods.display()))
-}
-
-fn load_scenario(path: &Path) -> Result<ScenarioDef> {
-    let text = std::fs::read_to_string(path)
-        .with_context(|| format!("reading scenario {}", path.display()))?;
-    ron::from_str(&text).with_context(|| format!("parsing scenario {}", path.display()))
-}
-
 /// Average price of each commodity across every market that trades it.
 fn average_prices(world: &World) -> Vec<(CommodityId, f64)> {
     let reg = world.registry();
@@ -157,17 +133,12 @@ fn total_trader_capital(world: &World) -> i64 {
 
 /// Advance the world one tick at a time, streaming each tick's newly-emitted
 /// events to stdout as they happen (the full log, unbounded by the ring buffer).
-fn stream_run(world: &mut World, ticks: u64) -> Result<()> {
+fn stream_run(session: &mut Session, ticks: u64) -> Result<()> {
     let mut out = std::io::stdout().lock();
     for _ in 0..ticks {
-        let now = world.tick_count();
-        world.tick();
-        // Events logged during this tick carry `tick == now` and sit at the tail
-        // of the buffer, so walk back until the tick changes.
-        let mut this: Vec<_> = world.events().rev().take_while(|e| e.tick == now).collect();
-        this.reverse();
-        if !this.is_empty() {
-            for e in this {
+        let events = session.step();
+        if !events.is_empty() {
+            for e in events {
                 writeln!(out, "[{:>6}] {:?}: {}", e.tick.get(), e.category, e.message)?;
             }
             out.flush()?;
@@ -186,8 +157,8 @@ fn main() -> Result<()> {
 
     match Cli::parse().command {
         Command::Validate { mods } => {
-            let reg = load(&mods)?;
-            // Build a zero-trader world too, so economy-level validation (e.g.
+            let reg = load_registry(&mods)?;
+            // Build a zero-trader session too, so economy-level validation (e.g.
             // industries referencing untraded commodities) runs. No ship needed.
             let probe = ScenarioDef {
                 name: "validate-probe".into(),
@@ -203,7 +174,7 @@ fn main() -> Result<()> {
                 escort: None,
                 navy: None,
             };
-            World::new(reg.clone(), &probe, 0, &pricing_registry()).context("economy validation")?;
+            Session::new(reg.clone(), &probe, 0).context("economy validation")?;
             println!(
                 "ok: {} commodities, {} recipes, {} systems linked",
                 reg.commodity_count(),
@@ -221,24 +192,24 @@ fn main() -> Result<()> {
             log,
             log_stream,
         } => {
-            let reg = load(&mods)?;
+            let reg = load_registry(&mods)?;
             let scn = load_scenario(&scenario)?;
             let seed = seed.unwrap_or(scn.seed);
             let ticks = ticks.unwrap_or(scn.ticks);
-            let mut world = World::new(reg.clone(), &scn, seed, &pricing_registry())
-                .context("building world")?;
+            let mut session = Session::new(reg.clone(), &scn, seed).context("building world")?;
 
             if log_stream {
-                stream_run(&mut world, ticks)?;
+                stream_run(&mut session, ticks)?;
             } else {
-                world.run(ticks);
+                session.run(ticks);
             }
+            let world = session.world();
 
             println!("ran {ticks} ticks (seed {seed})");
-            for (cid, avg) in average_prices(&world) {
+            for (cid, avg) in average_prices(world) {
                 println!("  {:<16} avg price {:>8.1}", reg.commodity_name(cid), avg);
             }
-            println!("  total trader capital {}", total_trader_capital(&world));
+            println!("  total trader capital {}", total_trader_capital(world));
             let p = world.piracy_stats();
             if p.ambushes > 0 || !world.pirates().is_empty() {
                 println!(
@@ -255,7 +226,7 @@ fn main() -> Result<()> {
             }
 
             if let Some(path) = dump {
-                let json = serde_json::to_string_pretty(&world.snapshot())?;
+                let json = serde_json::to_string_pretty(&session.snapshot())?;
                 std::fs::write(&path, json)
                     .with_context(|| format!("writing dump to {}", path.display()))?;
                 println!("dumped state to {}", path.display());
@@ -263,7 +234,7 @@ fn main() -> Result<()> {
 
             if log {
                 println!("--- event log (recent tail) ---");
-                for e in world.events() {
+                for e in session.world().events() {
                     println!("[{:>6}] {:?}: {}", e.tick.get(), e.category, e.message);
                 }
             }
@@ -276,12 +247,11 @@ fn main() -> Result<()> {
             seed,
             every,
         } => {
-            let reg = load(&mods)?;
+            let reg = load_registry(&mods)?;
             let scn = load_scenario(&scenario)?;
             let seed = seed.unwrap_or(scn.seed);
             let ticks = ticks.unwrap_or(scn.ticks);
-            let mut world = World::new(reg.clone(), &scn, seed, &pricing_registry())
-                .context("building world")?;
+            let mut session = Session::new(reg.clone(), &scn, seed).context("building world")?;
 
             // Header.
             print!("{:>8}", "tick");
@@ -303,13 +273,13 @@ fn main() -> Result<()> {
                 );
             };
 
-            sample(&world);
+            sample(session.world());
             let mut remaining = ticks;
             while remaining > 0 {
                 let step = remaining.min(every);
-                world.run(step);
+                session.run(step);
                 remaining -= step;
-                sample(&world);
+                sample(session.world());
             }
         }
 
@@ -321,7 +291,7 @@ fn main() -> Result<()> {
             seed,
             max_ticks,
         } => {
-            let reg = load(&mods)?;
+            let reg = load_registry(&mods)?;
             let vs = vs.unwrap_or_else(|| ship.clone());
 
             let mut combatants = spawn_squadron(&reg, &ship, 0, per_side, -50.0)?;
@@ -363,11 +333,8 @@ fn main() -> Result<()> {
             ship,
             capital,
         } => {
-            let reg = load(&mods)?;
-            let scn = load_scenario(&scenario)?;
-            let seed = seed.unwrap_or(scn.seed);
-            let mut world =
-                World::new(reg.clone(), &scn, seed, &pricing_registry()).context("building world")?;
+            let mut session = Session::load(&mods, &scenario, seed).context("building world")?;
+            let reg = session.registry_arc();
 
             let start_sys = reg
                 .system_id(&start)
@@ -378,14 +345,15 @@ fn main() -> Result<()> {
 
             // Spawn the player ship, then read back its stable id.
             let player = PlayerId(0);
-            world.queue_command(SimCommand::Spawn {
+            session.queue_command(SimCommand::Spawn {
                 player,
                 ship: ship_id,
                 at: start_sys,
                 capital,
             });
-            world.tick();
-            let trader = world
+            session.step();
+            let trader = session
+                .world()
                 .traders()
                 .iter()
                 .find(|t| t.is_player())
@@ -395,7 +363,14 @@ fn main() -> Result<()> {
             let stdin = std::io::stdin();
             let mut stdout = std::io::stdout();
             writeln!(stdout, "Welcome to Drift, commander. You fly a {ship}.")?;
-            play::run_repl(&reg, &mut world, player, trader, BufReader::new(stdin.lock()), &mut stdout)?;
+            play::run_repl(
+                &reg,
+                session.world_mut(),
+                player,
+                trader,
+                BufReader::new(stdin.lock()),
+                &mut stdout,
+            )?;
         }
     }
 

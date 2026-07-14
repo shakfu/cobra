@@ -6,6 +6,9 @@ members = [
     "crates/drift-mods",
     "crates/drift-economy",
     "crates/drift-combat",
+    "crates/drift-sim",
+    "crates/drift-proto",
+    "crates/drift-server",
     "crates/drift-cli",
     "crates/drift-client",
 ]
@@ -24,6 +27,9 @@ drift-data = { path = "crates/drift-data" }
 drift-mods = { path = "crates/drift-mods" }
 drift-economy = { path = "crates/drift-economy" }
 drift-combat = { path = "crates/drift-combat" }
+drift-sim = { path = "crates/drift-sim" }
+drift-proto = { path = "crates/drift-proto" }
+drift-server = { path = "crates/drift-server" }
 
 # Serialization
 serde = { version = "1", features = ["derive"] }

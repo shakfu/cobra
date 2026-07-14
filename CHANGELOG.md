@@ -18,7 +18,12 @@ Core simulation
 - Cargo workspace: `drift-core` (typed ids + interning, `DetRng`, tick, money, the
   `Step`/`SimContext` seam, the `NamedRegistry` plugin seam), `drift-data` (moddable
   serde schema), `drift-mods` (mod-loader), `drift-economy` (the `World`),
-  `drift-combat`, `drift-cli`, `drift-client`.
+  `drift-combat`, `drift-sim` (the session/driver layer), `drift-proto` (the
+  client/server wire contract), `drift-server` (the authoritative networked host),
+  `drift-cli`, `drift-client`.
+- `drift-sim::Session`: a session/driver façade that owns a `World` and centralizes
+  loading, command application, ticking, per-tick event draining, and snapshots.
+  Both the CLI and the graphical client drive it; a server would use the same façade.
 
 Data-driven mods
 
@@ -67,6 +72,26 @@ Player and clients
   colour-coded, per-category-filterable event log.
 - CLI subcommands: `validate`, `run` (with `--dump`, `--log`, `--log-stream`),
   `inspect`, `battle`, `play`.
+- Authoritative networked server (`drift-server`): a `Session` plus a TCP socket.
+  Clients connect, send serialized `Command`s, and receive state; the server ticks
+  the one canonical world at a fixed low rate and broadcasts each tick's events,
+  with a full snapshot on connect and every `snapshot_every` ticks. Length-prefixed
+  JSON framing (reusing the existing serde `Command`/`SimEvent`), `std`-threads only
+  (no async runtime), one thread mutating the world so determinism holds.
+- Shared wire-contract crate (`drift-proto`): the `ClientMessage`/`ServerMessage`
+  types, the length-prefixed JSON framing, and `WorldView` — the owned mirror a
+  client deserializes a broadcast snapshot into (the server sends a borrowed,
+  serialize-only `Snapshot`).
+- Networked client mode (`drift-client --connect <addr>`): the graphical client
+  now renders from a read-model fed by either an in-process `Session` or a remote
+  server. A background thread receives broadcasts into an owned `WorldView` and a
+  bounded event log; the client interpolates agent motion between the server's
+  ticks.
+- Player controls (Pilot panel): launch a ship, buy/sell against the docked
+  market, jump to a connected system, or retire — issued through one command sink
+  that queues on the in-process `Session` (single-player) or sends to the server
+  (networked). `WorldView` now carries per-system markets so the client can price
+  buys and sells. The player finds its own trader by owner in the received state.
 
 Observability
 

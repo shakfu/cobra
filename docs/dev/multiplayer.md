@@ -91,19 +91,24 @@ which is unorderable and un-networkable.
 
 ### To make when the work reaches them
 
-- **Factor a session/driver type** (`drift-sim` or similar) that owns the `World`,
-  applies commands, and emits snapshots, reused by the CLI, an eventual server, and
-  in-process single-player. The CLI is already a headless driver; a server is that
-  plus a socket.
+- **Session/driver type — DONE.** `drift-sim::Session` owns the `World` and
+  centralizes loading, command application, ticking, per-tick event draining, and
+  snapshots. The CLI and the graphical client both drive it; a server is that plus a
+  socket.
 - **`World<'r>` -> `Arc<Registry>` — DONE.** The world now owns `Arc<Registry>`
   (no lifetime), so it holds cleanly in a long-lived session/resource. (Done as the
   graphical-client prerequisite.)
+- **Authoritative networked server — DONE.** `drift-server` is the `Session`
+  plus a socket (see below).
+- **Networked client — DONE.** `drift-client --connect <addr>` renders an owned
+  `WorldView` mirror of the server's broadcasts and drives player commands from a
+  Pilot panel (see below).
 
 ### Deferred (premature now)
 
-Networking transport; delta encoding and interest management (needed only at
-scale); client prediction / rollback / lag compensation (needed only for real-time
-flight); accounts / auth / persistence backend.
+Delta encoding and interest management (needed only at scale); client prediction /
+rollback / lag compensation (needed only for real-time flight); accounts / auth /
+persistence backend.
 
 ## The command pipeline (scaffold)
 
@@ -130,6 +135,70 @@ Observability: `World::commands_applied()` / `commands_rejected()`.
 Because no scenario spawns player traders and no commands are queued in the
 existing runs, `command_phase` is a no-op there and the simulation is byte-identical
 to before — so determinism and all existing tests are unaffected.
+
+## The server (`drift-server`)
+
+The authoritative server realizes the recommended model directly: it is a
+`drift-sim::Session` plus a socket. Nothing about the simulation changed to make
+this work — the command pipeline, `Session`, and serde-serializable `Command` /
+`Snapshot` / `SimEvent` were the whole provision.
+
+- **Transport.** TCP with length-prefixed JSON framing (a 4-byte big-endian
+  length, then that many bytes of a JSON message). JSON reuses the serde derives
+  already on `Command` and `SimEvent` and keeps the protocol language-agnostic;
+  the length prefix makes messages self-delimiting on a stream. The wire contract
+  lives in its own crate, `drift-proto` (so a client depends on the contract, not
+  on the server binary): `ClientMessage { Command }`, `ServerMessage { State {
+  tick, events, snapshot } }`, the shared `read_msg`/`write_msg` framing, and
+  `WorldView` (below).
+- **No async runtime.** The simulation is turn-like at a low tick rate, so plain
+  `std` threads suffice and stay trivially testable: one accept thread, one reader
+  thread per client, and the **sim thread** that owns the `Session`. All network
+  traffic funnels through a single channel of input events, so exactly one thread
+  mutates the world — determinism is preserved. Wall-clock is used only to
+  *schedule* ticks (via `recv_timeout`), never inside simulation logic.
+- **Authoritative loop.** The sim thread selects between "a client input arrived"
+  and "the next tick is due". Commands are queued as they arrive and applied at the
+  next tick boundary in arrival order (the existing `command_phase`), so ordering
+  is deterministic and validation rejects untrusted input without crashing.
+- **State broadcast.** After each tick the server broadcasts a `State` with that
+  tick's events; the full snapshot rides along only every `snapshot_every` ticks
+  (and once immediately on connect) to bound bandwidth. The snapshot is carried as
+  a `serde_json::Value` so the server can serialize the borrowed `Snapshot`
+  without an owned mirror type. Full-snapshot-per-interval is the simple correct
+  baseline; delta encoding and interest management are the scaling path (deferred).
+- **Single-player is unchanged.** It remains an in-process `Session`; the server is
+  an *alternative host* for the same façade, not a replacement.
+
+## The networked client (`drift-client --connect`)
+
+The graphical client renders from a **read-model** that either an in-process
+`Session` or a networked server fills, so the renderer is written once and the
+network is just an alternate state source.
+
+- **Owned mirror.** The server broadcasts a borrowed `Snapshot` serialized to
+  JSON; that type is serialize-only, so the client deserializes into `WorldView`
+  (in `drift-proto`) — an owned struct declaring just the fields a client needs
+  (serde ignores the rest). This is the "non-snapshotable state" failure mode
+  avoided in practice: everything the client needs round-trips through JSON.
+- **Non-blocking UI.** A background reader thread decodes broadcasts and keeps the
+  latest `WorldView` plus a bounded event log behind a mutex; the UI thread reads
+  a cheap clone each frame and never blocks on the socket.
+- **Interpolation without a local clock.** The server ticks at its own low rate;
+  the client interpolates agent motion between received ticks using a running
+  estimate of the inter-tick wall-clock interval (the `InTransit { origin,
+  departure, arrival }` fields make this a pure lerp along the jump edge).
+- **Static content is local.** Only mutable state is sent; the client loads the
+  same mods locally for system positions, names, danger, and jump edges. Identical
+  content means identical interning, so market/system indices align. (A production
+  build would send a content hash to detect mismatches — deferred.)
+- **Player controls.** A "Pilot" panel drives the command path from the UI:
+  launch a ship, then buy/sell against the docked market, jump to a connected
+  system, or retire. It issues through one command sink — queued on the local
+  `Session` in-process, or sent to the server when networked — so the *same* panel
+  is single-player and multiplayer. The player finds its own trader by owner in
+  the received state (no id bookkeeping), and the server validates every command
+  authoritatively, so the UI can issue optimistically and a rejection is a no-op.
 
 ## Failure modes to guard against
 

@@ -35,8 +35,11 @@ drift-cli            headless driver: validate / run / inspect / battle
 | `drift-mods` | The mod-loader: discover, dependency-order, merge, and link content into an immutable `Registry`. |
 | `drift-economy` | The simulation: markets, pricing, production, NPC traders, pirates, navy, escorts, and the `World` that owns the RNG and drives the tick. |
 | `drift-combat` | The 2-D combat model: factions, targeting AI, hitscan weapons, shields, encounter resolution. |
-| `drift-cli` | Driver exposing `validate`, `run`, `inspect`, `battle`, and `play`. |
-| `drift-client` | Graphical observer (egui/eframe): a leaf crate over the sim; live galaxy-map view on a fixed-timestep loop. |
+| `drift-sim` | The session/driver layer: `Session` owns a `World` and centralizes loading, command application, ticking, per-tick event draining, and snapshots for hosts. |
+| `drift-proto` | The client/server wire contract (no I/O): the `ClientMessage`/`ServerMessage` types, length-prefixed JSON framing, and `WorldView` (the owned mirror a client deserializes a broadcast snapshot into). |
+| `drift-server` | The authoritative networked server: a `Session` plus a TCP socket. Accepts serialized `Command`s from clients, ticks at a fixed low rate, and broadcasts state (events every tick, full snapshots periodically). |
+| `drift-cli` | Driver exposing `validate`, `run`, `inspect`, `battle`, and `play` (over `Session`). |
+| `drift-client` | Graphical client (egui/eframe): renders from a read-model fed by either an in-process `Session` or a networked `drift-server` (`--connect`), and drives player commands (launch / buy / sell / jump / retire) from a Pilot panel through the same command sink in both modes. |
 
 ## The three load-bearing patterns
 

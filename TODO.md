@@ -9,13 +9,12 @@ Outstanding work for Drift. For rationale and sequencing see
 
 - [ ] Verify `drift-client` renders on a real display — it is currently
       compile-checked and unit-tested only (no GUI in the dev sandbox).
-- [ ] Graphical client: per-node **market panels** (click a system to show its
-      prices, stock vs. equilibrium, and production chains).
+- [ ] Graphical client: per-node **market panels** (click *any* system to show its
+      prices, stock vs. equilibrium, and production chains). Market data is already
+      on the wire (`WorldView.markets`) and shown for the docked system in the Pilot
+      panel; this is the click-any-node generalization.
 - [ ] Graphical client: on-map **combat flashes** / ambush markers, so fights are
       visible where they happen (not only in the log).
-- [ ] Factor a `drift-sim` session/driver type that owns the `World`, applies
-      commands, and emits snapshots — reused by the CLI, a future server, and
-      in-process single-player.
 
 ## Graphical client polish
 
@@ -37,7 +36,16 @@ Outstanding work for Drift. For rationale and sequencing see
 
 ## Multiplayer
 
-- [ ] Server-authoritative networking transport (build on the command pipeline).
+- [x] Server-authoritative networking transport (`drift-server`: TCP +
+      length-prefixed JSON over the command pipeline; std threads, no async).
+- [x] Networked **client** (`drift-client --connect`): an owned `WorldView` mirror
+      that applies server broadcasts and renders (shared wire contract in
+      `drift-proto`).
+- [x] Graphical **player** client: a Pilot panel drives launch / buy / sell / jump
+      / retire from the UI, through one command sink (local `Session` or server),
+      round-trip tested in both modes.
+- [ ] Content-version handshake: the client loads mods locally and assumes they
+      match the server; send a content hash on connect to detect a mismatch.
 - [ ] Snapshot delta encoding + interest management (needed only at scale).
 - [ ] Client prediction / rollback (needed only for a real-time flight layer).
 - [ ] Optional hardening: generational `TraderId` (the current monotonic,
