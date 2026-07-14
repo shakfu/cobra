@@ -1,0 +1,18 @@
+[package]
+name = "drift-mods"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[dependencies]
+drift-core = { workspace = true }
+drift-data = { workspace = true }
+serde = { workspace = true }
+ron = { workspace = true }
+toml = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+tempfile = "3"

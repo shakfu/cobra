@@ -1,0 +1,62 @@
+// The galaxy: 8 systems, each specialized. A system trades exactly the commodities
+// in its `initial_stock` (which is also each good's equilibrium/price anchor).
+// Producers are graph-adjacent to consumers of the same good, because NPC traders
+// move goods one jump at a time.
+[
+    // Agricultural: grows food, buys machinery.
+    (id: "core:lave", name: "Lave", position: (0.0, 0.0),
+     industries: ["core:farming", "core:use_machinery"],
+     connections: ["core:leesti", "core:orerve", "core:zaonce", "core:xexedi"],
+     initial_stock: [(commodity: "core:food", qty: 300), (commodity: "core:machinery", qty: 200)],
+     pricing: "supply_demand_v1"),
+
+    // Agricultural: grows food, buys luxuries.
+    (id: "core:diso", name: "Diso", position: (10.0, -14.0),
+     industries: ["core:farming", "core:consume_luxuries"],
+     connections: ["core:reorte", "core:tionisla", "core:orerve"],
+     initial_stock: [(commodity: "core:food", qty: 300), (commodity: "core:luxuries", qty: 200)],
+     pricing: "supply_demand_v1"),
+
+    // Mining: extracts ore, buys food.
+    (id: "core:leesti", name: "Leesti", position: (8.0, 6.0),
+     industries: ["core:mining", "core:eat_food"],
+     connections: ["core:lave", "core:zaonce"],
+     initial_stock: [(commodity: "core:ore", qty: 300), (commodity: "core:food", qty: 200)],
+     pricing: "supply_demand_v1"),
+
+    // Mining: extracts ore, buys food. A rough frontier world.
+    (id: "core:orerve", name: "Orerve", position: (6.0, -6.0),
+     industries: ["core:mining", "core:eat_food"],
+     connections: ["core:lave", "core:zaonce", "core:diso"],
+     initial_stock: [(commodity: "core:ore", qty: 300), (commodity: "core:food", qty: 200)],
+     pricing: "supply_demand_v1", danger: 0.35),
+
+    // Refinery: smelts ore into alloys, buys food.
+    (id: "core:zaonce", name: "Zaonce", position: (14.0, 0.0),
+     industries: ["core:smelting", "core:eat_food"],
+     connections: ["core:lave", "core:leesti", "core:orerve", "core:xexedi"],
+     initial_stock: [(commodity: "core:ore", qty: 200), (commodity: "core:alloys", qty: 300), (commodity: "core:food", qty: 200)],
+     pricing: "supply_demand_v1"),
+
+    // Industrial: fabricates machinery from alloys.
+    (id: "core:xexedi", name: "Xexedi", position: (22.0, 4.0),
+     industries: ["core:fabrication"],
+     connections: ["core:zaonce", "core:lave", "core:reorte", "core:tionisla"],
+     initial_stock: [(commodity: "core:alloys", qty: 200), (commodity: "core:machinery", qty: 300)],
+     pricing: "supply_demand_v1", danger: 0.3),
+
+    // Manufacturing: turns machinery + food into luxuries.
+    (id: "core:reorte", name: "Reorte", position: (20.0, -8.0),
+     industries: ["core:luxury_manufacture"],
+     connections: ["core:diso", "core:tionisla", "core:xexedi"],
+     initial_stock: [(commodity: "core:machinery", qty: 200), (commodity: "core:food", qty: 200), (commodity: "core:luxuries", qty: 300)],
+     pricing: "supply_demand_v1"),
+
+    // Rich consumer: sinks machinery and luxuries, produces nothing. A lawless
+    // frontier hub — its high-value imports draw pirates.
+    (id: "core:tionisla", name: "Tionisla", position: (28.0, -4.0),
+     industries: ["core:use_machinery", "core:consume_luxuries"],
+     connections: ["core:diso", "core:xexedi", "core:reorte"],
+     initial_stock: [(commodity: "core:machinery", qty: 200), (commodity: "core:luxuries", qty: 200)],
+     pricing: "supply_demand_v1", danger: 0.5),
+]

@@ -1,0 +1,18 @@
+[package]
+name = "drift-economy"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[dependencies]
+drift-core = { workspace = true }
+drift-data = { workspace = true }
+drift-mods = { workspace = true }
+drift-combat = { workspace = true }
+serde = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+serde_json = { workspace = true }

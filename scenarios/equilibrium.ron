@@ -1,0 +1,31 @@
+// Baseline run: a fleet of NPC traders, no player, left to settle the galaxy's
+// prices toward equilibrium. Used by the convergence test and `make run`.
+(
+    name: "equilibrium",
+    seed: 42,
+    ticks: 2000,
+    traders: (
+        count: 24,
+        ship: "core:cobra_mk3",
+        starting_capital: 5000,
+    ),
+    // Pirates ambush laden traders on dangerous routes. Cobras are armed and often
+    // win, but losses on the frontier disrupt the manufactured-goods trade.
+    piracy: Some((
+        pirate_ship: "core:pirate",
+        base_ambush_chance: 0.06,
+        max_pirates: 2,
+        respawn_delay: 60,
+        fleet_size: 14,
+        bounty: 500,
+        reinforce_interval: 25,
+    )),
+    // Traders weigh danger when routing: valuable runs into lawless space are
+    // discounted, so they lose fewer ships (but underserve the frontier).
+    risk_aversion: 1.0,
+    // Every convoy hires one escort fighter for protection in an ambush.
+    escort: Some((ship: "core:escort", count: 1)),
+    // A navy fleet patrols the lawless frontier, hunting pirates and defending
+    // traders under attack.
+    navy: Some((ship: "core:navy", fleet_size: 6, reinforce_interval: 40)),
+)

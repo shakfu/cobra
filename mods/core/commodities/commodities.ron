@@ -1,0 +1,9 @@
+// Base commodities. `base_price` is the price at equilibrium stock; `elasticity`
+// controls how sharply price reacts to surplus/shortage.
+[
+    (id: "core:food",      name: "Food",      base_price: 20,  unit_mass: 1, elasticity: 0.7, category: "food"),
+    (id: "core:ore",       name: "Ore",       base_price: 30,  unit_mass: 2, elasticity: 0.8, category: "minerals"),
+    (id: "core:alloys",    name: "Alloys",    base_price: 80,  unit_mass: 2, elasticity: 0.8, category: "minerals"),
+    (id: "core:machinery", name: "Machinery", base_price: 200, unit_mass: 3, elasticity: 0.9, category: "industrial"),
+    (id: "core:luxuries",  name: "Luxuries",  base_price: 400, unit_mass: 1, elasticity: 1.0, category: "luxury"),
+]

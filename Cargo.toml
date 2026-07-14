@@ -1,0 +1,49 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/drift-core",
+    "crates/drift-data",
+    "crates/drift-mods",
+    "crates/drift-economy",
+    "crates/drift-combat",
+    "crates/drift-cli",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+authors = ["Shakeeb Alireza"]
+repository = "https://github.com/OoliteProject/oolite"
+
+[workspace.dependencies]
+# Internal crates
+drift-core = { path = "crates/drift-core" }
+drift-data = { path = "crates/drift-data" }
+drift-mods = { path = "crates/drift-mods" }
+drift-economy = { path = "crates/drift-economy" }
+drift-combat = { path = "crates/drift-combat" }
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+ron = "0.8"
+toml = "0.8"
+serde_json = "1"
+
+# Determinism
+rand = "0.8"
+rand_chacha = "0.3"
+
+# Errors
+thiserror = "1"
+anyhow = "1"
+
+# CLI
+clap = { version = "4", features = ["derive"] }
+
+# Observability
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+[profile.release]
+lto = "thin"

@@ -1,0 +1,17 @@
+[package]
+name = "drift-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[dependencies]
+serde = { workspace = true }
+rand = { workspace = true }
+rand_chacha = { workspace = true, features = ["serde1"] }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+# State (incl. RNG counter) serializes through JSON, which supports u128; RON
+# does not, so RON is reserved for human-authored content elsewhere.
+serde_json = { workspace = true }

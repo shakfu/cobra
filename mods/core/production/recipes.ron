@@ -1,0 +1,36 @@
+// Production chain and consumption. Recipes with empty `inputs` are raw producers;
+// recipes with empty `outputs` are consumers (population demand) that create the
+// shortages pulling trade.
+//
+// `elasticity` makes consumption price-responsive: anything that consumes a good
+// buys less of it when it is locally dear. That applies to population consumers
+// AND to refiners (a factory throttles its intake when its input is expensive),
+// so every consumed good gets a price-restoring force. Without it, an intermediate
+// good like alloys — whose only consumer is a fixed-rate refiner — is a pure
+// integrator that drifts to its price clamp.
+//
+// Raw producers stay inelastic: keying supply on a producer's own (glutted, cheap)
+// local price would perversely throttle exports.
+//
+// Chain:  ore --smelting--> alloys --fabrication--> machinery --+
+//         food (farming) ------------------------------------- +--> luxuries
+[
+    // --- raw production (inelastic) ---
+    // Rates are balanced through the chain so no stage is structurally starved:
+    // food 16, ore 24 -> alloys 12 -> machinery 6 -> luxuries 4, matching demand.
+    (id: "core:farming", inputs: [], outputs: [(commodity: "core:food", qty: 8)], rate: 1),
+    (id: "core:mining",  inputs: [], outputs: [(commodity: "core:ore",  qty: 6)], rate: 2),
+
+    // --- refining chain (demand-elastic on the input good) ---
+    (id: "core:smelting",    inputs: [(commodity: "core:ore", qty: 2)],    outputs: [(commodity: "core:alloys", qty: 1)],    rate: 12, elasticity: 0.8),
+    (id: "core:fabrication", inputs: [(commodity: "core:alloys", qty: 2)], outputs: [(commodity: "core:machinery", qty: 1)], rate: 6,  elasticity: 0.8),
+    (id: "core:luxury_manufacture",
+        inputs:  [(commodity: "core:machinery", qty: 1), (commodity: "core:food", qty: 1)],
+        outputs: [(commodity: "core:luxuries", qty: 1)],
+        rate: 4, elasticity: 0.8),
+
+    // --- consumption / population demand (demand-elastic) ---
+    (id: "core:eat_food",         inputs: [(commodity: "core:food", qty: 2)],      outputs: [], rate: 2, elasticity: 1.0),
+    (id: "core:use_machinery",    inputs: [(commodity: "core:machinery", qty: 1)], outputs: [], rate: 1, elasticity: 1.2),
+    (id: "core:consume_luxuries", inputs: [(commodity: "core:luxuries", qty: 1)],  outputs: [], rate: 1, elasticity: 1.5),
+]

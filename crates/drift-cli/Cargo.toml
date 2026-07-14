@@ -1,0 +1,24 @@
+[package]
+name = "drift-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[[bin]]
+name = "drift"
+path = "src/main.rs"
+
+[dependencies]
+drift-core = { workspace = true }
+drift-data = { workspace = true }
+drift-mods = { workspace = true }
+drift-economy = { workspace = true }
+drift-combat = { workspace = true }
+serde = { workspace = true }
+ron = { workspace = true }
+serde_json = { workspace = true }
+anyhow = { workspace = true }
+clap = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
